@@ -5,8 +5,14 @@ const { generateArtifact, detectArtifactType } = require('./artifactGenerator');
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
 const BOT_PREFIX = process.env.BOT_PREFIX || '!';
+
+const GEMINI_MODEL_FALLBACKS = [
+  GEMINI_MODEL,
+  'gemini-2.0-flash',
+  'gemini-1.5-flash',
+].filter((value, index, arr) => value && arr.indexOf(value) === index);
 
 if (!DISCORD_TOKEN) {
   console.error('DISCORD_TOKEN belum diisi di file .env');
@@ -87,9 +93,9 @@ function buildAutoSkillInstruction(prompt) {
   ].join('\n');
 }
 
-async function askGemini(prompt, username) {
+async function callGeminiModel(model, prompt, username) {
   const systemInstruction = buildAutoSkillInstruction(prompt);
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
   const body = {
     contents: [
       {
@@ -118,15 +124,38 @@ async function askGemini(prompt, username) {
 
   if (!response.ok) {
     const msg = data?.error?.message || raw || `HTTP ${response.status}`;
-    throw new Error(`Gemini API error ${response.status}: ${msg}`);
+    const error = new Error(`Gemini API error ${response.status} on ${model}: ${msg}`);
+    error.status = response.status;
+    error.model = model;
+    throw error;
   }
 
   return extractGeminiText(data);
 }
 
+async function askGemini(prompt, username) {
+  let lastError;
+
+  for (const model of GEMINI_MODEL_FALLBACKS) {
+    try {
+      console.log(`Mencoba model Gemini: ${model}`);
+      return await callGeminiModel(model, prompt, username);
+    } catch (error) {
+      lastError = error;
+      const msg = String(error && error.message ? error.message : error).toLowerCase();
+      const canFallback = msg.includes('404') || msg.includes('not found') || msg.includes('not supported') || msg.includes('model');
+      if (!canFallback) break;
+      console.warn(`Model gagal, coba fallback berikutnya: ${model}`);
+    }
+  }
+
+  throw lastError;
+}
+
 client.once('ready', () => {
   console.log(`KelNara AI aktif sebagai ${client.user.tag}`);
-  console.log(`Model: ${GEMINI_MODEL}`);
+  console.log(`Model utama: ${GEMINI_MODEL}`);
+  console.log(`Fallback model: ${GEMINI_MODEL_FALLBACKS.join(', ')}`);
   console.log('Auto-skill: ON');
   console.log('Artifact generator: ON');
 });
@@ -182,7 +211,7 @@ client.on('messageCreate', async (message) => {
     }
 
     if (msg.includes('400') || msg.includes('404') || msg.toLowerCase().includes('model')) {
-      await message.reply('Model Gemini di .env kemungkinan salah. Coba pakai GEMINI_MODEL=gemini-flash-latest lalu restart bot.');
+      await message.reply('Model Gemini masih gagal. Coba set GEMINI_MODEL=gemini-2.0-flash di .env, lalu restart bot.');
       return;
     }
 
