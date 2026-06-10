@@ -1,6 +1,7 @@
 require('dotenv').config();
 
-const { Client, GatewayIntentBits, Partials } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, AttachmentBuilder } = require('discord.js');
+const { generateArtifact, detectArtifactType } = require('./artifactGenerator');
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -52,10 +53,16 @@ function extractGeminiText(data) {
   return text || 'Aku belum bisa menjawab itu.';
 }
 
-function buildAutoSkillInstruction() {
+function buildAutoSkillInstruction(prompt) {
+  const artifactType = detectArtifactType(prompt);
+  const artifactNote = artifactType
+    ? `User meminta output file tipe ${artifactType}. Buat konten yang siap dijadikan file. Jangan menolak. Untuk website, buat konsep halaman lengkap: section, copywriting, fitur, dan isi konten. Untuk PPT/PDF/DOCX/XLSX, buat isi yang terstruktur.`
+    : 'Jika user tidak meminta file, jawab sebagai chat biasa.';
+
   return [
     'Kamu adalah KelNara AI, bot Discord multifungsi yang otomatis memilih skill sesuai isi pesan user.',
     'Tidak perlu menunggu mode khusus. Baca pesan user lalu tentukan sendiri skill yang cocok.',
+    artifactNote,
     '',
     'Skill otomatis yang harus kamu pakai:',
     '1. General chat: jawab singkat, jelas, ramah, dan praktis.',
@@ -81,7 +88,7 @@ function buildAutoSkillInstruction() {
 }
 
 async function askGemini(prompt, username) {
-  const systemInstruction = buildAutoSkillInstruction();
+  const systemInstruction = buildAutoSkillInstruction(prompt);
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
   const body = {
     contents: [
@@ -121,6 +128,7 @@ client.once('ready', () => {
   console.log(`KelNara AI aktif sebagai ${client.user.tag}`);
   console.log(`Model: ${GEMINI_MODEL}`);
   console.log('Auto-skill: ON');
+  console.log('Artifact generator: ON');
 });
 
 client.on('messageCreate', async (message) => {
@@ -135,14 +143,32 @@ client.on('messageCreate', async (message) => {
 
     const prompt = cleanPrompt(message);
     if (!prompt) {
-      await message.reply('Tulis pertanyaannya setelah mention bot. Skill akan otomatis dipilih sesuai pertanyaanmu.');
+      await message.reply('Tulis pertanyaannya setelah mention bot. Skill dan jenis output akan otomatis dipilih sesuai pertanyaanmu.');
       return;
     }
 
+    const artifactType = detectArtifactType(prompt);
     await message.channel.sendTyping();
-    const answer = await askGemini(prompt, message.author.username);
-    const chunks = chunkText(answer);
 
+    const answer = await askGemini(prompt, message.author.username);
+
+    if (artifactType) {
+      const info = await message.reply(`Sedang membuat file ${artifactType.toUpperCase()}...`);
+      const artifact = await generateArtifact(prompt, answer);
+
+      if (artifact && artifact.path) {
+        const attachment = new AttachmentBuilder(artifact.path, { name: artifact.name });
+        await message.reply({
+          content: `Selesai. Ini file ${artifact.type.toUpperCase()} yang kamu minta:`,
+          files: [attachment],
+        });
+        return;
+      }
+
+      await info.edit('Gagal membuat file. Aku kirim isi kontennya saja.');
+    }
+
+    const chunks = chunkText(answer);
     for (const chunk of chunks) {
       await message.reply(chunk);
     }
