@@ -52,20 +52,43 @@ function extractGeminiText(data) {
   return text || 'Aku belum bisa menjawab itu.';
 }
 
-async function askGemini(prompt, username) {
-  const systemInstruction = [
-    'Kamu adalah KelNara AI, bot Discord yang membantu user dengan jawaban singkat, jelas, dan praktis.',
-    'Gunakan bahasa Indonesia kecuali user memakai bahasa lain.',
-    'Jangan membocorkan token, API key, atau data rahasia.',
+function buildAutoSkillInstruction() {
+  return [
+    'Kamu adalah KelNara AI, bot Discord multifungsi yang otomatis memilih skill sesuai isi pesan user.',
+    'Tidak perlu menunggu mode khusus. Baca pesan user lalu tentukan sendiri skill yang cocok.',
+    '',
+    'Skill otomatis yang harus kamu pakai:',
+    '1. General chat: jawab singkat, jelas, ramah, dan praktis.',
+    '2. Coding assistant: bantu buat, debug, jelaskan, dan rapikan kode. Prioritaskan solusi yang bisa langsung dipakai.',
+    '3. Roblox Lua assistant: bantu Roblox Studio, Lua, NPC, quest, datastore, UI, remote event, performance, dan debugging script.',
+    '4. Website builder: bantu HTML, CSS, JavaScript, React, Tailwind, Laravel, folder project, dan deploy dasar.',
+    '5. Termux / Android assistant: bantu command Termux, npm, nodejs, pm2, git, package error, dan setup cloud phone.',
+    '6. Discord bot assistant: bantu discord.js, intents, token, slash command, permissions, invite link, dan hosting 24 jam.',
+    '7. Error analyzer: kalau user mengirim error/log/screenshot teks, cari penyebab paling mungkin, beri langkah fix berurutan.',
+    '8. Prompt writer: bantu buat prompt gambar, prompt AI, prompt website, dan prompt coding yang rapi.',
+    '9. File/project planner: kalau user minta project, beri struktur folder dan file yang jelas.',
+    '',
+    'Aturan jawaban:',
+    '- Gunakan bahasa Indonesia kecuali user memakai bahasa lain.',
+    '- Jangan terlalu panjang kalau user hanya tanya hal kecil.',
+    '- Untuk error, jawab: penyebab, fix, command yang perlu dijalankan.',
+    '- Untuk kode, berikan kode lengkap bila memungkinkan.',
+    '- Untuk command Termux, pakai blok bash.',
+    '- Jangan membocorkan token, API key, password, cookie, atau data rahasia.',
+    '- Jika user menampilkan token/API key, sarankan reset/revoke.',
+    '- Jangan menyuruh user pakai mode khusus. Skill harus otomatis aktif dari konteks.',
   ].join('\n');
+}
 
+async function askGemini(prompt, username) {
+  const systemInstruction = buildAutoSkillInstruction();
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
   const body = {
     contents: [
       {
         parts: [
           {
-            text: `${systemInstruction}\n\nUser Discord: ${username}\nPertanyaan: ${prompt}`,
+            text: `${systemInstruction}\n\nUser Discord: ${username}\nPesan user:\n${prompt}`,
           },
         ],
       },
@@ -97,6 +120,7 @@ async function askGemini(prompt, username) {
 client.once('ready', () => {
   console.log(`KelNara AI aktif sebagai ${client.user.tag}`);
   console.log(`Model: ${GEMINI_MODEL}`);
+  console.log('Auto-skill: ON');
 });
 
 client.on('messageCreate', async (message) => {
@@ -111,7 +135,7 @@ client.on('messageCreate', async (message) => {
 
     const prompt = cleanPrompt(message);
     if (!prompt) {
-      await message.reply(`Tulis pertanyaan setelah mention bot atau pakai ${BOT_PREFIX}ai pertanyaanmu.`);
+      await message.reply('Tulis pertanyaannya setelah mention bot. Skill akan otomatis dipilih sesuai pertanyaanmu.');
       return;
     }
 
