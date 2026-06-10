@@ -1,11 +1,10 @@
 require('dotenv').config();
 
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
-const { GoogleGenAI } = require('@google/genai');
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
 const BOT_PREFIX = process.env.BOT_PREFIX || '!';
 
 if (!DISCORD_TOKEN) {
@@ -17,8 +16,6 @@ if (!GEMINI_API_KEY) {
   console.error('GEMINI_API_KEY belum diisi di file .env');
   process.exit(1);
 }
-
-const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
 const client = new Client({
   intents: [
@@ -49,6 +46,12 @@ function chunkText(text, maxLength = 1900) {
   return chunks;
 }
 
+function extractGeminiText(data) {
+  const parts = data?.candidates?.[0]?.content?.parts || [];
+  const text = parts.map((part) => part.text || '').join('\n').trim();
+  return text || 'Aku belum bisa menjawab itu.';
+}
+
 async function askGemini(prompt, username) {
   const systemInstruction = [
     'Kamu adalah KelNara AI, bot Discord yang membantu user dengan jawaban singkat, jelas, dan praktis.',
@@ -56,12 +59,39 @@ async function askGemini(prompt, username) {
     'Jangan membocorkan token, API key, atau data rahasia.',
   ].join('\n');
 
-  const response = await ai.models.generateContent({
-    model: GEMINI_MODEL,
-    contents: `${systemInstruction}\n\nUser Discord: ${username}\nPertanyaan: ${prompt}`,
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+  const body = {
+    contents: [
+      {
+        parts: [
+          {
+            text: `${systemInstruction}\n\nUser Discord: ${username}\nPertanyaan: ${prompt}`,
+          },
+        ],
+      },
+    ],
+  };
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
   });
 
-  return response.text || 'Aku belum bisa menjawab itu.';
+  const raw = await response.text();
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    data = { raw };
+  }
+
+  if (!response.ok) {
+    const msg = data?.error?.message || raw || `HTTP ${response.status}`;
+    throw new Error(`Gemini API error ${response.status}: ${msg}`);
+  }
+
+  return extractGeminiText(data);
 }
 
 client.once('ready', () => {
@@ -95,11 +125,23 @@ client.on('messageCreate', async (message) => {
   } catch (error) {
     console.error(error);
     const msg = String(error && error.message ? error.message : error);
+
     if (msg.includes('429') || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('rate')) {
       await message.reply('Limit Gemini free tier sedang kena. Coba lagi nanti.');
       return;
     }
-    await message.reply('Bot error. Cek log Termux dengan: npm run logs atau pm2 logs kelnara-ai-bot');
+
+    if (msg.includes('400') || msg.includes('404') || msg.toLowerCase().includes('model')) {
+      await message.reply('Model Gemini di .env kemungkinan salah. Coba pakai GEMINI_MODEL=gemini-flash-latest lalu restart bot.');
+      return;
+    }
+
+    if (msg.includes('401') || msg.includes('403') || msg.toLowerCase().includes('api key')) {
+      await message.reply('API key Gemini bermasalah. Buat key baru di Google AI Studio lalu update file .env.');
+      return;
+    }
+
+    await message.reply('Bot error. Cek log Termux dengan: pm2 logs kelnara-ai-bot atau lihat terminal node index.js');
   }
 });
 
