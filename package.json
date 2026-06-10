@@ -1,0 +1,14 @@
+{
+  "name": "discord-bot-ai",
+  "version": "1.0.0",
+  "description": "KelNara AI Discord bot powered by Gemini API",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@google/genai": "latest",
+    "discord.js": "latest",
+    "dotenv": "latest"
+  }
+}
