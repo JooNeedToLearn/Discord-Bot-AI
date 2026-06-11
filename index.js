@@ -1,26 +1,24 @@
 require('dotenv').config();
 
+const fs = require('fs');
+const path = require('path');
 const { Client, GatewayIntentBits, Partials, AttachmentBuilder } = require('discord.js');
 const { generateArtifact, detectArtifactType } = require('./artifactGenerator');
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+const MIMO_API_KEY = process.env.MIMO_API_KEY;
+const MIMO_BASE_URL = (process.env.MIMO_BASE_URL || 'https://api.xiaomimimo.com/v1').replace(/\/$/, '');
+const MIMO_MODEL = process.env.MIMO_MODEL || 'mimo-v2.5-pro';
 const BOT_PREFIX = process.env.BOT_PREFIX || '!';
-
-const GEMINI_MODEL_FALLBACKS = [
-  GEMINI_MODEL,
-  'gemini-2.0-flash',
-  'gemini-1.5-flash',
-].filter((value, index, arr) => value && arr.indexOf(value) === index);
+const SKILL_FILE = process.env.SKILL_FILE || 'skill.shj';
 
 if (!DISCORD_TOKEN) {
   console.error('DISCORD_TOKEN belum diisi di file .env');
   process.exit(1);
 }
 
-if (!GEMINI_API_KEY) {
-  console.error('GEMINI_API_KEY belum diisi di file .env');
+if (!MIMO_API_KEY) {
+  console.error('MIMO_API_KEY belum diisi di file .env');
   process.exit(1);
 }
 
@@ -53,65 +51,97 @@ function chunkText(text, maxLength = 1900) {
   return chunks;
 }
 
-function extractGeminiText(data) {
-  const parts = data?.candidates?.[0]?.content?.parts || [];
-  const text = parts.map((part) => part.text || '').join('\n').trim();
-  return text || 'Aku belum bisa menjawab itu.';
+function readSkillFile() {
+  const skillPath = path.join(__dirname, SKILL_FILE);
+  try {
+    return fs.readFileSync(skillPath, 'utf8').trim();
+  } catch {
+    return '';
+  }
+}
+
+function fallbackSkillPack() {
+  return [
+    'SKILL PACK FALLBACK KELNARA AI',
+    '1. General chat: jawab singkat, jelas, ramah, dan praktis.',
+    '2. Coding assistant: bantu buat, debug, jelaskan, dan rapikan kode.',
+    '3. Discord bot assistant: bantu discord.js, intents, slash command, permission, dan hosting.',
+    '4. Termux / VSPhone assistant: bantu command Android, npm, nodejs, pm2, git, dan error package.',
+    '5. Website builder: bantu HTML, CSS, JavaScript, React, Tailwind, Laravel, dan deploy dasar.',
+    '6. Roblox Studio Lua assistant: bantu NPC, quest, datastore, UI, remote event, dan debugging script studio.',
+    '7. Error analyzer: kalau user mengirim error/log, jelaskan penyebab dan fix berurutan.',
+    '8. Prompt writer: bantu prompt gambar, website, coding, dan AI.',
+    '9. Artifact generator: bantu susun isi untuk website, PDF, DOCX, PPTX, dan XLSX.',
+  ].join('\n');
 }
 
 function buildAutoSkillInstruction(prompt) {
   const artifactType = detectArtifactType(prompt);
   const artifactNote = artifactType
-    ? `User meminta output file tipe ${artifactType}. Buat konten yang siap dijadikan file. Jangan menolak. Untuk website, buat konsep halaman lengkap: section, copywriting, fitur, dan isi konten. Untuk PPT/PDF/DOCX/XLSX, buat isi yang terstruktur.`
+    ? `User meminta output file tipe ${artifactType}. Buat konten yang siap dijadikan file. Jangan menolak selama aman. Untuk website, buat konsep halaman lengkap: section, copywriting, fitur, dan isi konten. Untuk PPT/PDF/DOCX/XLSX, buat isi yang terstruktur.`
     : 'Jika user tidak meminta file, jawab sebagai chat biasa.';
 
+  const skillPack = readSkillFile() || fallbackSkillPack();
+
   return [
-    'Kamu adalah KelNara AI, bot Discord multifungsi yang otomatis memilih skill sesuai isi pesan user.',
+    'Kamu adalah KelNara AI, bot Discord multifungsi untuk user Indonesia.',
+    'Kamu memakai Xiaomi MiMo sebagai model utama. Jangan mengaku memakai Gemini/OpenAI/Groq/Ollama.',
     'Tidak perlu menunggu mode khusus. Baca pesan user lalu tentukan sendiri skill yang cocok.',
     artifactNote,
     '',
-    'Skill otomatis yang harus kamu pakai:',
-    '1. General chat: jawab singkat, jelas, ramah, dan praktis.',
-    '2. Coding assistant: bantu buat, debug, jelaskan, dan rapikan kode. Prioritaskan solusi yang bisa langsung dipakai.',
-    '3. Roblox Lua assistant: bantu Roblox Studio, Lua, NPC, quest, datastore, UI, remote event, performance, dan debugging script.',
-    '4. Website builder: bantu HTML, CSS, JavaScript, React, Tailwind, Laravel, folder project, dan deploy dasar.',
-    '5. Termux / Android assistant: bantu command Termux, npm, nodejs, pm2, git, package error, dan setup cloud phone.',
-    '6. Discord bot assistant: bantu discord.js, intents, token, slash command, permissions, invite link, dan hosting 24 jam.',
-    '7. Error analyzer: kalau user mengirim error/log/screenshot teks, cari penyebab paling mungkin, beri langkah fix berurutan.',
-    '8. Prompt writer: bantu buat prompt gambar, prompt AI, prompt website, dan prompt coding yang rapi.',
-    '9. File/project planner: kalau user minta project, beri struktur folder dan file yang jelas.',
+    'Gunakan daftar skill berikut sebagai kemampuan utama:',
+    skillPack,
     '',
     'Aturan jawaban:',
     '- Gunakan bahasa Indonesia kecuali user memakai bahasa lain.',
-    '- Jangan terlalu panjang kalau user hanya tanya hal kecil.',
-    '- Untuk error, jawab: penyebab, fix, command yang perlu dijalankan.',
+    '- Jawab langsung ke inti, tidak bertele-tele.',
+    '- Untuk error, jawab dengan format: penyebab, fix, command yang perlu dijalankan.',
     '- Untuk kode, berikan kode lengkap bila memungkinkan.',
-    '- Untuk command Termux, pakai blok bash.',
+    '- Untuk command Termux/VSPhone, pakai blok bash.',
     '- Jangan membocorkan token, API key, password, cookie, atau data rahasia.',
     '- Jika user menampilkan token/API key, sarankan reset/revoke.',
+    '- Tolak permintaan yang berbahaya seperti token grabber, pencurian akun, malware, spam, atau exploit merusak.',
     '- Jangan menyuruh user pakai mode khusus. Skill harus otomatis aktif dari konteks.',
   ].join('\n');
 }
 
-async function callGeminiModel(model, prompt, username) {
-  const systemInstruction = buildAutoSkillInstruction(prompt);
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
-  const body = {
-    contents: [
-      {
-        parts: [
-          {
-            text: `${systemInstruction}\n\nUser Discord: ${username}\nPesan user:\n${prompt}`,
-          },
-        ],
-      },
-    ],
-  };
+function extractMiMoText(data) {
+  const message = data?.choices?.[0]?.message;
+  const content = message?.content;
 
-  const response = await fetch(url, {
+  if (Array.isArray(content)) {
+    return content.map((part) => part?.text || part?.content || '').join('\n').trim() || 'Aku belum bisa menjawab itu.';
+  }
+
+  return String(content || '').trim() || 'Aku belum bisa menjawab itu.';
+}
+
+async function askMiMo(prompt, username) {
+  const systemInstruction = buildAutoSkillInstruction(prompt);
+
+  const response = await fetch(`${MIMO_BASE_URL}/chat/completions`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    headers: {
+      Authorization: `Bearer ${MIMO_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: MIMO_MODEL,
+      messages: [
+        {
+          role: 'system',
+          content: systemInstruction,
+        },
+        {
+          role: 'user',
+          content: `User Discord: ${username}\nPesan user:\n${prompt}`,
+        },
+      ],
+      temperature: 0.7,
+      top_p: 0.95,
+      max_completion_tokens: 1600,
+      stream: false,
+    }),
   });
 
   const raw = await response.text();
@@ -123,39 +153,21 @@ async function callGeminiModel(model, prompt, username) {
   }
 
   if (!response.ok) {
-    const msg = data?.error?.message || raw || `HTTP ${response.status}`;
-    const error = new Error(`Gemini API error ${response.status} on ${model}: ${msg}`);
+    const msg = data?.error?.message || data?.message || raw || `HTTP ${response.status}`;
+    const error = new Error(`MiMo API error ${response.status}: ${msg}`);
     error.status = response.status;
-    error.model = model;
     throw error;
   }
 
-  return extractGeminiText(data);
-}
-
-async function askGemini(prompt, username) {
-  let lastError;
-
-  for (const model of GEMINI_MODEL_FALLBACKS) {
-    try {
-      console.log(`Mencoba model Gemini: ${model}`);
-      return await callGeminiModel(model, prompt, username);
-    } catch (error) {
-      lastError = error;
-      const msg = String(error && error.message ? error.message : error).toLowerCase();
-      const canFallback = msg.includes('404') || msg.includes('not found') || msg.includes('not supported') || msg.includes('model');
-      if (!canFallback) break;
-      console.warn(`Model gagal, coba fallback berikutnya: ${model}`);
-    }
-  }
-
-  throw lastError;
+  return extractMiMoText(data);
 }
 
 client.once('ready', () => {
   console.log(`KelNara AI aktif sebagai ${client.user.tag}`);
-  console.log(`Model utama: ${GEMINI_MODEL}`);
-  console.log(`Fallback model: ${GEMINI_MODEL_FALLBACKS.join(', ')}`);
+  console.log(`Provider AI: Xiaomi MiMo`);
+  console.log(`Model utama: ${MIMO_MODEL}`);
+  console.log(`Base URL: ${MIMO_BASE_URL}`);
+  console.log(`Skill file: ${SKILL_FILE}`);
   console.log('Auto-skill: ON');
   console.log('Artifact generator: ON');
 });
@@ -179,7 +191,7 @@ client.on('messageCreate', async (message) => {
     const artifactType = detectArtifactType(prompt);
     await message.channel.sendTyping();
 
-    const answer = await askGemini(prompt, message.author.username);
+    const answer = await askMiMo(prompt, message.author.username);
 
     if (artifactType) {
       const info = await message.reply(`Sedang membuat file ${artifactType.toUpperCase()}...`);
@@ -204,23 +216,24 @@ client.on('messageCreate', async (message) => {
   } catch (error) {
     console.error(error);
     const msg = String(error && error.message ? error.message : error);
+    const lower = msg.toLowerCase();
 
-    if (msg.includes('429') || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('rate')) {
-      await message.reply('Limit Gemini free tier sedang kena. Coba lagi nanti.');
+    if (msg.includes('429') || lower.includes('quota') || lower.includes('rate') || lower.includes('balance')) {
+      await message.reply('Limit atau balance Xiaomi MiMo sedang bermasalah. Cek saldo/balance MiMo kamu, lalu coba restart bot.');
       return;
     }
 
-    if (msg.includes('400') || msg.includes('404') || msg.toLowerCase().includes('model')) {
-      await message.reply('Model Gemini masih gagal. Coba set GEMINI_MODEL=gemini-2.0-flash di .env, lalu restart bot.');
+    if (msg.includes('400') || msg.includes('404') || lower.includes('model')) {
+      await message.reply('Model Xiaomi MiMo gagal. Coba set MIMO_MODEL=mimo-v2.5-pro dan pastikan MIMO_BASE_URL sudah benar di file .env.');
       return;
     }
 
-    if (msg.includes('401') || msg.includes('403') || msg.toLowerCase().includes('api key')) {
-      await message.reply('API key Gemini bermasalah. Buat key baru di Google AI Studio lalu update file .env.');
+    if (msg.includes('401') || msg.includes('403') || lower.includes('api key') || lower.includes('unauthorized')) {
+      await message.reply('API key Xiaomi MiMo bermasalah. Cek MIMO_API_KEY di file .env, pastikan key aktif dan balance tersedia.');
       return;
     }
 
-    await message.reply('Bot error. Cek log Termux dengan: pm2 logs kelnara-ai-bot atau lihat terminal node index.js');
+    await message.reply('Bot error. Cek log VSPhone/Termux dengan: pm2 logs kelnara-ai-bot atau lihat terminal node index.js');
   }
 });
 
