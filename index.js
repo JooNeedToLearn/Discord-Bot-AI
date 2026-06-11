@@ -1,16 +1,12 @@
 require('dotenv').config();
 
-const fs = require('fs');
-const path = require('path');
-const { Client, GatewayIntentBits, Partials, AttachmentBuilder } = require('discord.js');
-const { generateArtifact, detectArtifactType } = require('./artifactGenerator');
+const { Client, GatewayIntentBits, Partials } = require('discord.js');
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const MIMO_API_KEY = process.env.MIMO_API_KEY;
 const MIMO_BASE_URL = (process.env.MIMO_BASE_URL || 'https://api.xiaomimimo.com/v1').replace(/\/$/, '');
 const MIMO_MODEL = process.env.MIMO_MODEL || 'mimo-v2.5-pro';
 const BOT_PREFIX = process.env.BOT_PREFIX || '!';
-const SKILL_FILE = process.env.SKILL_FILE || 'skill.shj';
 
 if (!DISCORD_TOKEN) {
   console.error('DISCORD_TOKEN belum diisi di file .env');
@@ -43,65 +39,29 @@ function cleanPrompt(message) {
 function chunkText(text, maxLength = 1900) {
   const chunks = [];
   let rest = String(text || '');
+
   while (rest.length > maxLength) {
-    chunks.push(rest.slice(0, maxLength));
-    rest = rest.slice(maxLength);
+    let cutAt = rest.lastIndexOf('\n', maxLength);
+    if (cutAt < 500) cutAt = maxLength;
+    chunks.push(rest.slice(0, cutAt));
+    rest = rest.slice(cutAt).trimStart();
   }
+
   if (rest.length) chunks.push(rest);
   return chunks;
 }
 
-function readSkillFile() {
-  const skillPath = path.join(__dirname, SKILL_FILE);
-  try {
-    return fs.readFileSync(skillPath, 'utf8').trim();
-  } catch {
-    return '';
-  }
-}
-
-function fallbackSkillPack() {
+function buildSystemPrompt() {
   return [
-    'SKILL PACK FALLBACK KELNARA AI',
-    '1. General chat: jawab singkat, jelas, ramah, dan praktis.',
-    '2. Coding assistant: bantu buat, debug, jelaskan, dan rapikan kode.',
-    '3. Discord bot assistant: bantu discord.js, intents, slash command, permission, dan hosting.',
-    '4. Termux / VSPhone assistant: bantu command Android, npm, nodejs, pm2, git, dan error package.',
-    '5. Website builder: bantu HTML, CSS, JavaScript, React, Tailwind, Laravel, dan deploy dasar.',
-    '6. Roblox Studio Lua assistant: bantu NPC, quest, datastore, UI, remote event, dan debugging script studio.',
-    '7. Error analyzer: kalau user mengirim error/log, jelaskan penyebab dan fix berurutan.',
-    '8. Prompt writer: bantu prompt gambar, website, coding, dan AI.',
-    '9. Artifact generator: bantu susun isi untuk website, PDF, DOCX, PPTX, dan XLSX.',
-  ].join('\n');
-}
-
-function buildAutoSkillInstruction(prompt) {
-  const artifactType = detectArtifactType(prompt);
-  const artifactNote = artifactType
-    ? `User meminta output file tipe ${artifactType}. Buat konten yang siap dijadikan file. Jangan menolak selama aman. Untuk website, buat konsep halaman lengkap: section, copywriting, fitur, dan isi konten. Untuk PPT/PDF/DOCX/XLSX, buat isi yang terstruktur.`
-    : 'Jika user tidak meminta file, jawab sebagai chat biasa.';
-
-  const skillPack = readSkillFile() || fallbackSkillPack();
-
-  return [
-    'Kamu adalah KelNara AI, bot Discord multifungsi untuk user Indonesia.',
-    'Kamu memakai Xiaomi MiMo sebagai model utama. Jangan mengaku memakai Gemini/OpenAI/Groq/Ollama.',
-    'Tidak perlu menunggu mode khusus. Baca pesan user lalu tentukan sendiri skill yang cocok.',
-    artifactNote,
-    '',
-    'Gunakan daftar skill berikut sebagai kemampuan utama:',
-    skillPack,
-    '',
-    'Aturan jawaban:',
-    '- Gunakan bahasa Indonesia kecuali user memakai bahasa lain.',
-    '- Jawab langsung ke inti, tidak bertele-tele.',
-    '- Untuk error, jawab dengan format: penyebab, fix, command yang perlu dijalankan.',
-    '- Untuk kode, berikan kode lengkap bila memungkinkan.',
-    '- Untuk command Termux/VSPhone, pakai blok bash.',
-    '- Jangan membocorkan token, API key, password, cookie, atau data rahasia.',
-    '- Jika user menampilkan token/API key, sarankan reset/revoke.',
-    '- Tolak permintaan yang berbahaya seperti token grabber, pencurian akun, malware, spam, atau exploit merusak.',
-    '- Jangan menyuruh user pakai mode khusus. Skill harus otomatis aktif dari konteks.',
+    'Kamu adalah KelNara Bot, personal AI agent Discord milik user.',
+    'Provider utama kamu adalah Xiaomi MiMo. Jangan mengaku memakai Gemini.',
+    'Jawab dalam bahasa Indonesia yang santai, jelas, dan langsung ke solusi.',
+    'Bantu user untuk chat umum, coding, Discord bot, website, Termux/VSPhone, debugging, dan ide project.',
+    'Kalau user minta dibuatkan website, script, file, atau project, berikan kode atau isi lengkap di chat. Jangan membuat attachment file.',
+    'Kalau user mengirim error, jelaskan penyebab paling mungkin lalu berikan langkah fix berurutan.',
+    'Untuk command terminal gunakan blok bash. Untuk kode gunakan blok kode sesuai bahasa.',
+    'Jangan membocorkan token, API key, password, cookie, atau data rahasia.',
+    'Tolak permintaan yang berbahaya atau merugikan orang lain.',
   ].join('\n');
 }
 
@@ -117,8 +77,6 @@ function extractMiMoText(data) {
 }
 
 async function askMiMo(prompt, username) {
-  const systemInstruction = buildAutoSkillInstruction(prompt);
-
   const response = await fetch(`${MIMO_BASE_URL}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -130,7 +88,7 @@ async function askMiMo(prompt, username) {
       messages: [
         {
           role: 'system',
-          content: systemInstruction,
+          content: buildSystemPrompt(),
         },
         {
           role: 'user',
@@ -139,13 +97,14 @@ async function askMiMo(prompt, username) {
       ],
       temperature: 0.7,
       top_p: 0.95,
-      max_completion_tokens: 1600,
+      max_completion_tokens: 1800,
       stream: false,
     }),
   });
 
   const raw = await response.text();
   let data;
+
   try {
     data = JSON.parse(raw);
   } catch {
@@ -164,12 +123,9 @@ async function askMiMo(prompt, username) {
 
 client.once('ready', () => {
   console.log(`KelNara AI aktif sebagai ${client.user.tag}`);
-  console.log(`Provider AI: Xiaomi MiMo`);
-  console.log(`Model utama: ${MIMO_MODEL}`);
+  console.log('Mode: Xiaomi MiMo personal agent');
+  console.log(`Model: ${MIMO_MODEL}`);
   console.log(`Base URL: ${MIMO_BASE_URL}`);
-  console.log(`Skill file: ${SKILL_FILE}`);
-  console.log('Auto-skill: ON');
-  console.log('Artifact generator: ON');
 });
 
 client.on('messageCreate', async (message) => {
@@ -184,33 +140,14 @@ client.on('messageCreate', async (message) => {
 
     const prompt = cleanPrompt(message);
     if (!prompt) {
-      await message.reply('Tulis pertanyaannya setelah mention bot. Skill dan jenis output akan otomatis dipilih sesuai pertanyaanmu.');
+      await message.reply('Tulis pertanyaannya setelah mention bot atau pakai !ai.');
       return;
     }
 
-    const artifactType = detectArtifactType(prompt);
     await message.channel.sendTyping();
-
     const answer = await askMiMo(prompt, message.author.username);
 
-    if (artifactType) {
-      const info = await message.reply(`Sedang membuat file ${artifactType.toUpperCase()}...`);
-      const artifact = await generateArtifact(prompt, answer);
-
-      if (artifact && artifact.path) {
-        const attachment = new AttachmentBuilder(artifact.path, { name: artifact.name });
-        await message.reply({
-          content: `Selesai. Ini file ${artifact.type.toUpperCase()} yang kamu minta:`,
-          files: [attachment],
-        });
-        return;
-      }
-
-      await info.edit('Gagal membuat file. Aku kirim isi kontennya saja.');
-    }
-
-    const chunks = chunkText(answer);
-    for (const chunk of chunks) {
+    for (const chunk of chunkText(answer)) {
       await message.reply(chunk);
     }
   } catch (error) {
@@ -219,21 +156,21 @@ client.on('messageCreate', async (message) => {
     const lower = msg.toLowerCase();
 
     if (msg.includes('429') || lower.includes('quota') || lower.includes('rate') || lower.includes('balance')) {
-      await message.reply('Limit atau balance Xiaomi MiMo sedang bermasalah. Cek saldo/balance MiMo kamu, lalu coba restart bot.');
+      await message.reply('Limit atau balance Xiaomi MiMo sedang bermasalah. Cek saldo MiMo kamu lalu coba lagi.');
       return;
     }
 
     if (msg.includes('400') || msg.includes('404') || lower.includes('model')) {
-      await message.reply('Model Xiaomi MiMo gagal. Coba set MIMO_MODEL=mimo-v2.5-pro dan pastikan MIMO_BASE_URL sudah benar di file .env.');
+      await message.reply('Model Xiaomi MiMo gagal. Coba set MIMO_MODEL=mimo-v2.5-pro dan cek MIMO_BASE_URL di .env.');
       return;
     }
 
     if (msg.includes('401') || msg.includes('403') || lower.includes('api key') || lower.includes('unauthorized')) {
-      await message.reply('API key Xiaomi MiMo bermasalah. Cek MIMO_API_KEY di file .env, pastikan key aktif dan balance tersedia.');
+      await message.reply('API key Xiaomi MiMo bermasalah. Cek MIMO_API_KEY di file .env.');
       return;
     }
 
-    await message.reply('Bot error. Cek log VSPhone/Termux dengan: pm2 logs kelnara-ai-bot atau lihat terminal node index.js');
+    await message.reply(`Bot error dari MiMo/Node.js:\n\`\`\`${msg.slice(0, 1500)}\`\`\``);
   }
 });
 
